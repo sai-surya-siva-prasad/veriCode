@@ -1,6 +1,5 @@
-
 import React, { useState } from 'react';
-import { VerilogProblem, Difficulty, UserProgress } from '../types';
+import { VerilogProblem, Difficulty } from '../types';
 import { Clock, X, Code2, Library, Sparkles, Search, CheckCircle2, Circle } from 'lucide-react';
 
 interface HistorySidebarProps {
@@ -10,7 +9,7 @@ interface HistorySidebarProps {
   onSelect: (problem: VerilogProblem) => void;
   isOpen: boolean;
   onClose: () => void;
-  progressMap: Record<string, UserProgress>;
+  statusMap: Record<string, 'solved' | 'attempted' | 'unseen'>;
 }
 
 const DifficultyBadge = ({ level }: { level: Difficulty }) => {
@@ -43,7 +42,7 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
     onSelect, 
     isOpen, 
     onClose,
-    progressMap
+    statusMap
 }) => {
   const [activeTab, setActiveTab] = useState<'library' | 'history'>('library');
   const [searchQuery, setSearchQuery] = useState('');
@@ -129,7 +128,7 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
                         key={problem.id} 
                         problem={problem} 
                         isActive={currentId === problem.id} 
-                        status={progressMap[problem.id]?.status}
+                        status={statusMap[problem.id]}
                         onSelect={onSelect}
                         showTime={false}
                     />
@@ -150,7 +149,7 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
                             key={problem.id} 
                             problem={problem} 
                             isActive={currentId === problem.id}
-                            status={progressMap[problem.id]?.status} 
+                            status={statusMap[problem.id]} 
                             onSelect={onSelect}
                             showTime={true}
                         />

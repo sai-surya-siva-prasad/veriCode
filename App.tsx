@@ -1,33 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RotateCcw, Cpu, Code2, ChevronDown, Sparkles, Menu, MessageSquare, LogIn } from 'lucide-react';
+import { Play, RotateCcw, Cpu, Code2, ChevronDown, Sparkles, Menu, MessageSquare } from 'lucide-react';
 import CodeEditor from './components/CodeEditor';
 import ProblemPanel from './components/ProblemPanel';
 import OutputConsole from './components/OutputConsole';
 import HistorySidebar from './components/HistorySidebar';
 import ChatPanel from './components/ChatPanel';
-import AuthModal from './components/AuthModal';
-import ProfileModal from './components/ProfileModal';
 import { generateProblem, verifySolution, getChatResponse } from './services/geminiService';
 import { STATIC_PROBLEMS } from './services/questionBank';
-import { 
-    loginUser, 
-    logoutUser, 
-    subscribeToAuthChanges, 
-    saveUserProgress, 
-    getUserProgress, 
-    getAllUserProgress, 
-    getUserStats 
-} from './services/userService';
-import { VerilogProblem, VerificationResult, Difficulty, ChatMessage, User, UserProgress } from './types';
+import { VerilogProblem, VerificationResult, Difficulty, ChatMessage } from './types';
 
 const App: React.FC = () => {
-  // User & Auth State
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [userProgressMap, setUserProgressMap] = useState<Record<string, UserProgress>>({});
-  const [userStats, setUserStats] = useState({ totalSolved: 0, totalAttempted: 0, recentActivity: [] as any[] });
-
   // Core App State
   const [currentProblem, setCurrentProblem] = useState<VerilogProblem | null>(null);
   const [code, setCode] = useState<string>('');
@@ -37,6 +19,11 @@ const App: React.FC = () => {
   const [difficulty, setDifficulty] = useState<Difficulty>('Easy');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   
+  // Local Persistence State (Replacing User/DB for now)
+  const [savedSolutions, setSavedSolutions] = useState<Record<string, { code: string; result: VerificationResult | null }>>({});
+  const [savedChats, setSavedChats] = useState<Record<string, ChatMessage[]>>({});
+  const [problemStatus, setProblemStatus] = useState<Record<string, 'solved' | 'attempted' | 'unseen'>>({});
+
   // Sidebar State
   const [problemHistory, setProblemHistory] = useState<VerilogProblem[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -46,37 +33,7 @@ const App: React.FC = () => {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
 
-  // 1. Authentication Listener (Firebase is Async)
-  useEffect(() => {
-    const unsubscribe = subscribeToAuthChanges(async (authUser) => {
-        setUser(authUser);
-        if (authUser) {
-            // Load user data when they log in
-            const progress = await getAllUserProgress(authUser.id);
-            setUserProgressMap(progress);
-            
-            // Refresh stats
-            const stats = await getUserStats(authUser.id);
-            setUserStats(stats);
-
-            // If a problem is currently selected, try to reload the state for it
-            if (currentProblem && progress[currentProblem.id]) {
-                const p = progress[currentProblem.id];
-                setCode(p.lastCode);
-                setResult(p.lastResult);
-                setChatMessages(p.chatHistory);
-            }
-        } else {
-            // Clear user data on logout
-            setUserProgressMap({});
-            setUserStats({ totalSolved: 0, totalAttempted: 0, recentActivity: [] });
-        }
-    });
-    return () => unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProblem?.id]); // Re-run if problem changes just to ensuring syncing, though mostly auth driven
-
-  // 2. Initial Problem Load
+  // Initial Problem Load
   useEffect(() => {
     if (STATIC_PROBLEMS.length > 0) {
       handleSelectProblem(STATIC_PROBLEMS[0]);
@@ -86,48 +43,39 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 3. Persist Progress (Debounced)
+  // Auto-save progress locally when code/result changes
   useEffect(() => {
-    if (!currentProblem || !user) return;
+    if (currentProblem) {
+      setSavedSolutions(prev => ({
+        ...prev,
+        [currentProblem.id]: { code, result }
+      }));
 
-    const timer = setTimeout(() => {
-      const status = result?.isCorrect ? 'solved' : (result ? 'attempted' : 'unseen');
-      
-      const currentProgress = userProgressMap[currentProblem.id];
-      let newStatus = status;
-      // Don't downgrade status
-      if (currentProgress?.status === 'solved') newStatus = 'solved';
-      else if (currentProgress?.status === 'attempted' && status === 'unseen') newStatus = 'attempted';
+      // Update status
+      let status: 'solved' | 'attempted' | 'unseen' = 'unseen';
+      if (result?.isCorrect) status = 'solved';
+      else if (result) status = 'attempted';
+      else if (problemStatus[currentProblem.id]) status = problemStatus[currentProblem.id]; // Keep existing status if just editing
 
-      const progress: UserProgress = {
-        problemId: currentProblem.id,
-        status: newStatus as 'solved' | 'attempted' | 'unseen',
-        lastCode: code,
-        lastResult: result,
-        chatHistory: chatMessages,
-        timestamp: Date.now()
-      };
+      if (status !== 'unseen') {
+         setProblemStatus(prev => ({
+             ...prev,
+             [currentProblem.id]: status
+         }));
+      }
+    }
+  }, [code, result, currentProblem]);
 
-      // Optimistic update
-      setUserProgressMap(prev => ({ ...prev, [currentProblem.id]: progress }));
-      
-      // Fire and forget save
-      saveUserProgress(user.id, progress);
-    }, 2000); // Save every 2 seconds of inactivity
+  // Auto-save Chat History locally
+  useEffect(() => {
+    if (currentProblem) {
+      setSavedChats(prev => ({
+        ...prev,
+        [currentProblem.id]: chatMessages
+      }));
+    }
+  }, [chatMessages, currentProblem]);
 
-    return () => clearTimeout(timer);
-  }, [code, result, chatMessages, currentProblem, user]);
-
-  const handleLogin = async () => {
-    // The actual login logic is handled by signInWithPopup in userService.
-    // The state update happens in the useEffect listener above.
-    await loginUser();
-  };
-
-  const handleLogout = async () => {
-    await logoutUser();
-    setIsProfileModalOpen(false);
-  };
 
   const handleNewProblem = async (diff: Difficulty) => {
     setLoading(true);
@@ -161,45 +109,34 @@ const App: React.FC = () => {
     
     setCurrentProblem(problem);
 
-    // Try to load from local cache first
-    if (user && userProgressMap[problem.id]) {
-       const saved = userProgressMap[problem.id];
-       setCode(saved.lastCode);
-       setResult(saved.lastResult);
-       setChatMessages(saved.chatHistory);
-       return;
+    // Restore Code & Result from local state
+    const savedSol = savedSolutions[problem.id];
+    if (savedSol) {
+      setCode(savedSol.code);
+      setResult(savedSol.result);
+    } else {
+      setCode(problem.initialCode);
+      setResult(null);
     }
 
-    // If needed, we could fetch specifically for this problem from DB here if cache missed,
-    // but for now we rely on the bulk fetch at login.
-
-    // Default Reset
-    setCode(problem.initialCode);
-    setResult(null);
-    setChatMessages([
+    // Restore Chat History or Init
+    const savedChat = savedChats[problem.id];
+    if (savedChat && savedChat.length > 0) {
+      setChatMessages(savedChat);
+    } else {
+      setChatMessages([
         { role: 'model', text: `Hi! I'm ready to help you with "${problem.title}".\n\nAsk me for a hint if you get stuck!` }
-    ]);
+      ]);
+    }
   };
 
   const handleRunCode = async () => {
     if (!currentProblem) return;
-    
-    if (!user) {
-         // Optionally prompt for login here
-    }
-
     setVerifying(true);
     setResult(null);
     try {
       const res = await verifySolution(currentProblem, code);
       setResult(res);
-      
-      // If user is logged in, stats will update on next refresh or we can manually refetch,
-      // but strictly speaking the ProfileModal fetches on render/open usually or we can rely on local state.
-      if (user && res.isCorrect) {
-          // Quick update to local stats for immediate feedback in UI if we were displaying counters
-      }
-
     } catch (error) {
       console.error(error);
     } finally {
@@ -244,22 +181,7 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen bg-[#09090b] text-white flex flex-col overflow-hidden font-sans">
-      <AuthModal 
-        isOpen={isAuthModalOpen} 
-        onClose={() => setIsAuthModalOpen(false)} 
-        onLogin={handleLogin} 
-      />
       
-      {user && (
-        <ProfileModal 
-            isOpen={isProfileModalOpen}
-            onClose={() => setIsProfileModalOpen(false)}
-            user={user}
-            stats={userStats}
-            onLogout={handleLogout}
-        />
-      )}
-
       {/* Navbar */}
       <header className="h-14 border-b border-zinc-800 bg-[#09090b] flex items-center justify-between px-4 shrink-0 z-20">
         <div className="flex items-center space-x-4">
@@ -332,24 +254,6 @@ const App: React.FC = () => {
                 <Play className="w-4 h-4 fill-current" />
                 <span>{verifying ? 'Verifying...' : 'Submit'}</span>
             </button>
-
-            {/* Auth Button */}
-            {user ? (
-                 <button 
-                    onClick={() => setIsProfileModalOpen(true)}
-                    className="flex items-center justify-center rounded-full overflow-hidden border border-zinc-700 hover:border-zinc-500 transition-all ml-2"
-                 >
-                     <img src={user.avatarUrl} alt="User" className="w-8 h-8" />
-                 </button>
-            ) : (
-                <button
-                    onClick={() => setIsAuthModalOpen(true)}
-                    className="flex items-center space-x-2 px-3 py-1.5 rounded-md text-sm font-medium hover:bg-zinc-800 transition-colors text-zinc-300 ml-2"
-                >
-                    <LogIn className="w-4 h-4" />
-                    <span className="hidden md:inline">Sign In</span>
-                </button>
-            )}
         </div>
       </header>
 
@@ -364,7 +268,7 @@ const App: React.FC = () => {
             onSelect={handleSelectProblem}
             isOpen={isSidebarOpen}
             onClose={() => setIsSidebarOpen(false)}
-            progressMap={userProgressMap}
+            statusMap={problemStatus}
         />
 
         {/* Content */}
