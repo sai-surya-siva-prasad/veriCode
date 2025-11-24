@@ -1,0 +1,5 @@
+{
+  "name": "VeriCode AI",
+  "description": "A LeetCode-style interview preparation platform specifically for Verilog and FPGA design, powered by Gemini AI to generate problems and verify solutions.",
+  "requestFramePermissions": []
+}
